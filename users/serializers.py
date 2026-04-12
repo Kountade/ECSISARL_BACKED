@@ -1,6 +1,6 @@
 from rest_framework import serializers
-from .models import CustomUser
 from django.contrib.auth import get_user_model
+from .models import CustomUser
 
 User = get_user_model()
 
@@ -9,15 +9,11 @@ class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField()
 
-    def to_representation(self, instance):
-        ret = super().to_representation(instance)
-        ret.pop('password', None)
-        return ret
-
 
 class RegisterSerializer(serializers.ModelSerializer):
     role = serializers.ChoiceField(
-        choices=CustomUser.ROLE_CHOICES, required=False)
+        choices=CustomUser.ROLE_CHOICES, required=False
+    )
 
     class Meta:
         model = User
@@ -28,7 +24,6 @@ class RegisterSerializer(serializers.ModelSerializer):
         }
 
     def create(self, validated_data):
-        # Si le rôle n'est pas fourni, défaut à 'commercial' (seul rôle disponible avec super_admin)
         if 'role' not in validated_data:
             validated_data['role'] = 'commercial'
         user = User.objects.create_user(**validated_data)
@@ -36,15 +31,52 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
+    """Sérialiseur de lecture pour la liste des utilisateurs."""
     class Meta:
         model = User
-        fields = ('id', 'email', 'role', 'birthday', 'username')
-        read_only_fields = ('id', 'email', 'role')
+        fields = (
+            'id', 'email', 'username', 'role', 'department',
+            'phone', 'is_active', 'profile_picture', 'created_at'
+        )
+        read_only_fields = fields
 
 
 class UserDetailSerializer(serializers.ModelSerializer):
+    """Sérialiseur de lecture détaillée."""
     class Meta:
         model = User
-        fields = ('id', 'email', 'role', 'birthday',
-                  'username', 'is_staff', 'is_superuser')
-        read_only_fields = ('id', 'is_staff', 'is_superuser')
+        fields = '__all__'
+        read_only_fields = ('id', 'created_at', 'updated_at', 'last_login')
+
+
+class UserWriteSerializer(serializers.ModelSerializer):
+    """
+    Sérialiseur pour la création et modification d'utilisateurs.
+    Permet de définir le mot de passe et tous les champs modifiables.
+    """
+    password = serializers.CharField(write_only=True, required=False)
+
+    class Meta:
+        model = User
+        fields = [
+            'email', 'password', 'username', 'role', 'department',
+            'phone', 'address', 'city', 'country', 'postal_code',
+            'employee_id', 'hire_date', 'contract_type', 'salary',
+            'is_active', 'profile_picture', 'birthday'
+        ]
+
+    def create(self, validated_data):
+        password = validated_data.pop('password', None)
+        user = super().create(validated_data)
+        if password:
+            user.set_password(password)
+            user.save()
+        return user
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
+        user = super().update(instance, validated_data)
+        if password:
+            user.set_password(password)
+            user.save()
+        return user

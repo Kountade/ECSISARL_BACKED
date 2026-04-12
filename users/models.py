@@ -22,13 +22,12 @@ class CustomUserManager(BaseUserManager):
     def create_superuser(self, email, password=None, **extra_fields):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
-        extra_fields.setdefault('role', 'super_admin')   # Administrateur général
+        extra_fields.setdefault('role', 'super_admin')
         extra_fields.setdefault('is_active', True)
         return self.create_user(email, password, **extra_fields)
 
 
 class CustomUser(AbstractUser):
-    # ✅ Rôles simplifiés : seulement deux
     ROLE_CHOICES = (
         ('super_admin', 'Administrateur général'),
         ('commercial', 'Commercial'),
@@ -52,31 +51,37 @@ class CustomUser(AbstractUser):
     email = models.EmailField(max_length=200, unique=True)
     birthday = models.DateField(null=True, blank=True)
     username = models.CharField(max_length=200, null=True, blank=True)
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='commercial')
-    department = models.CharField(max_length=20, choices=DEPARTMENT_CHOICES, null=True, blank=True)
-    
+    role = models.CharField(
+        max_length=20, choices=ROLE_CHOICES, default='commercial')
+    department = models.CharField(
+        max_length=20, choices=DEPARTMENT_CHOICES, null=True, blank=True)
+
     # Informations personnelles
     phone = models.CharField(max_length=20, null=True, blank=True)
     address = models.TextField(null=True, blank=True)
     city = models.CharField(max_length=100, null=True, blank=True)
-    country = models.CharField(max_length=100, null=True, blank=True, default='France')
+    country = models.CharField(
+        max_length=100, null=True, blank=True, default='France')
     postal_code = models.CharField(max_length=20, null=True, blank=True)
-    
+
     # Informations professionnelles
-    employee_id = models.CharField(max_length=50, unique=True, null=True, blank=True)
+    employee_id = models.CharField(
+        max_length=50, unique=True, null=True, blank=True)
     hire_date = models.DateField(null=True, blank=True)
     contract_type = models.CharField(max_length=50, null=True, blank=True)
-    salary = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    
-    # Métadonnées
-    is_active = models.BooleanField(default=True)
+    salary = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True)
+
+    # Métadonnées supplémentaires
     last_login_ip = models.GenericIPAddressField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    created_by = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_users')
-    
+    created_by = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_users')
+
     # Photo de profil
-    profile_picture = models.ImageField(upload_to='profile_pictures/', null=True, blank=True)
+    profile_picture = models.ImageField(
+        upload_to='profile_pictures/', null=True, blank=True)
 
     objects = CustomUserManager()
 
@@ -112,7 +117,8 @@ def password_reset_token_created(reset_password_token, *args, **kwargs):
         'user_name': reset_password_token.user.get_full_name()
     }
 
-    html_message = render_to_string("users/email/password_reset.html", context=context)
+    html_message = render_to_string(
+        "users/email/password_reset.html", context=context)
     plain_message = strip_tags(html_message)
 
     msg = EmailMultiAlternatives(
