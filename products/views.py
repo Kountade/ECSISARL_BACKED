@@ -12,12 +12,16 @@ import pandas as pd
 from django.http import HttpResponse
 
 
+from rest_framework.parsers import MultiPartParser, FormParser
+
+
 class CategoryViewset(viewsets.ModelViewSet):
     """
     Viewset pour gérer les catégories de produits
     """
     permission_classes = [permissions.IsAuthenticated]
     queryset = Category.objects.all()
+    parser_classes = [MultiPartParser, FormParser]  # Ajoutez cette ligne
     filter_backends = [DjangoFilterBackend,
                        filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['is_active', 'parent']
@@ -28,27 +32,6 @@ class CategoryViewset(viewsets.ModelViewSet):
         if self.action == 'retrieve':
             return CategoryDetailSerializer
         return CategorySerializer
-
-    @action(detail=False, methods=['get'])
-    def tree(self, request):
-        """Retourne l'arborescence complète des catégories"""
-        categories = Category.objects.filter(parent__isnull=True)
-        serializer = self.get_serializer(categories, many=True)
-        return Response(serializer.data)
-
-    @action(detail=True, methods=['get'])
-    def products(self, request, pk=None):
-        """Retourne tous les produits d'une catégorie"""
-        category = self.get_object()
-        products = category.products.filter(is_active=True)
-        page = self.paginate_queryset(products)
-        if page is not None:
-            serializer = ProductListSerializer(
-                page, many=True, context={'request': request})
-            return self.get_paginated_response(serializer.data)
-        serializer = ProductListSerializer(
-            products, many=True, context={'request': request})
-        return Response(serializer.data)
 
 
 class BrandViewset(viewsets.ModelViewSet):
@@ -91,6 +74,7 @@ class UnitViewset(viewsets.ModelViewSet):
 class ProductViewset(viewsets.ModelViewSet):
     queryset = Product.objects.all()
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]  # Ajoutez cette ligne
     filter_backends = [DjangoFilterBackend,
                        filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['category', 'brand', 'is_active', 'product_type']
@@ -137,6 +121,7 @@ class ProductVariantViewset(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     queryset = ProductVariant.objects.all()
     serializer_class = ProductVariantSerializer
+    parser_classes = [MultiPartParser, FormParser]  # Ajoutez cette ligne
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['product', 'is_active']
     search_fields = ['sku']
