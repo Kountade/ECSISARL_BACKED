@@ -44,12 +44,13 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "users",
+    "inventory",
     "products",
     "knox",
     "rest_framework",
     "corsheaders",
     "django_rest_passwordreset",
-
+    "purchases"
 ]
 
 MIDDLEWARE = [
