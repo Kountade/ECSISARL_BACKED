@@ -9,6 +9,7 @@ urlpatterns = [
     path('', include('products.urls')),
     path('', include('inventory.urls')),
     path('', include('purchases.urls')),
+    path('', include('sales.urls')),
 
     path('api/auth/', include('knox.urls')),
 
