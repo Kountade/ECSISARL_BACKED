@@ -1,3 +1,13 @@
+from .serializers import (
+    PurchaseOrderListSerializer,
+    PurchaseOrderDetailSerializer,
+    PurchaseOrderCreateUpdateSerializer,
+    PurchaseReceiptCreateSerializer,
+    PurchaseReceiptSerializer
+)
+from .models import PurchaseOrder, Supplier
+from django.db.models.functions import TruncMonth
+from django.db.models import Q, Sum
 from django.shortcuts import render
 
 # Create your views here.
@@ -100,6 +110,9 @@ class SupplierContactViewset(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['supplier', 'is_primary', 'is_active']
     search_fields = ['first_name', 'last_name', 'email']
+
+
+# purchases/views.py (ou purchase_orders/views.py)
 
 
 class PurchaseOrderViewset(viewsets.ModelViewSet):
@@ -210,18 +223,32 @@ class PurchaseOrderViewset(viewsets.ModelViewSet):
             status__in=['confirmed', 'in_transit'],
             expected_date__lt=timezone.now().date()
         ).count()
+
+        # Top fournisseurs – annotation sans conflit
         top_suppliers = Supplier.objects.annotate(
-            total_spent=Sum('purchase_orders__total')
-        ).filter(total_spent__isnull=False).order_by('-total_spent')[:5]
+            total_spent_calc=Sum('purchase_orders__total', filter=Q(
+                purchase_orders__status='received'))
+        ).filter(total_spent_calc__isnull=False).order_by('-total_spent_calc')[:5]
+
+        # Dépenses mensuelles avec TruncMonth
         six_months_ago = timezone.now().date() - timedelta(days=180)
         monthly_spending = PurchaseOrder.objects.filter(
             order_date__gte=six_months_ago,
             status='received'
-        ).extra(
-            select={'month': "strftime('%Y-%m', order_date)"}
+        ).annotate(
+            month=TruncMonth('order_date')
         ).values('month').annotate(
             total=Sum('total')
         ).order_by('month')
+
+        monthly_data = [
+            {
+                'month': item['month'].strftime('%Y-%m') if item['month'] else None,
+                'total': float(item['total']) if item['total'] else 0
+            }
+            for item in monthly_spending
+        ]
+
         return Response({
             'total_orders': total_orders,
             'total_amount': total_amount,
@@ -229,13 +256,12 @@ class PurchaseOrderViewset(viewsets.ModelViewSet):
             'pending_orders': pending_orders,
             'late_orders': late_orders,
             'top_suppliers': [
-                {'name': s.company_name, 'total_spent': s.total_spent}
+                {'name': s.company_name,
+                    'total_spent': float(s.total_spent_calc)}
                 for s in top_suppliers
             ],
-            'monthly_spending': list(monthly_spending)
+            'monthly_spending': monthly_data
         })
-
-# purchases/views.py
 
 # purchases/views.py - VÉRIFICATION
 
