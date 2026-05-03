@@ -445,6 +445,8 @@ class QuotationItem(models.Model):
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
     variant = models.ForeignKey(
         ProductVariant, on_delete=models.SET_NULL, null=True, blank=True)
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, null=True,
+                                  blank=True, related_name='quotation_items')  # Ajouter ce champ
 
     quantity = models.IntegerField(validators=[MinValueValidator(1)])
     unit_price = models.DecimalField(max_digits=12, decimal_places=2)

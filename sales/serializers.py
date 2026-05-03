@@ -374,14 +374,14 @@ class QuotationItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_reference = serializers.CharField(
         source='product.reference', read_only=True)
+    warehouse_name = serializers.CharField(
+        source='warehouse.name', read_only=True)
 
     class Meta:
         model = QuotationItem
         fields = '__all__'
         read_only_fields = ('subtotal', 'tax_amount', 'total', 'quotation')
 
-
-# sales/serializers.py - Corrigez QuotationListSerializer
 
 class QuotationListSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(
@@ -390,32 +390,25 @@ class QuotationListSerializer(serializers.ModelSerializer):
         source='get_status_display', read_only=True)
     items_count = serializers.IntegerField(
         source='items.count', read_only=True)
-    # Ajoutez ces champs pour avoir les informations client supplémentaires
-    customer_email = serializers.EmailField(
-        source='customer.email', read_only=True)
-    customer_phone = serializers.CharField(
-        source='customer.phone', read_only=True)
-
-    # Ajoutez les items pour les afficher dans le tableau
-    items = serializers.SerializerMethodField()
+    items = serializers.SerializerMethodField()  # Ajouter cette ligne
 
     class Meta:
         model = Quotation
-        fields = ('id', 'quotation_number', 'customer_name', 'customer_email', 'customer_phone',
-                  'quotation_date', 'valid_until', 'status', 'status_display', 'total',
-                  'items_count', 'items')
+        fields = ('id', 'quotation_number', 'customer_name', 'quotation_date',
+                  'valid_until', 'status', 'status_display', 'total',
+                  'items_count', 'items')  # Ajouter 'items' ici
 
     def get_items(self, obj):
-        """Retourne les items du devis"""
+        """Récupérer les items du devis"""
         return [
             {
                 'id': item.id,
-                'product': item.product.id,
                 'product_name': item.product.name,
                 'product_reference': item.product.reference,
                 'quantity': item.quantity,
                 'unit_price': float(item.unit_price),
-                'total': float(item.total)
+                'total': float(item.total),
+                'product': item.product.id
             }
             for item in obj.items.all()
         ]
@@ -425,6 +418,12 @@ class QuotationDetailSerializer(serializers.ModelSerializer):
     customer = CustomerListSerializer(read_only=True)
     items = QuotationItemSerializer(many=True, read_only=True)
     created_by = UserSerializer(read_only=True)
+    subtotal = serializers.DecimalField(
+        max_digits=12, decimal_places=2, read_only=True)
+    tax_total = serializers.DecimalField(
+        max_digits=12, decimal_places=2, read_only=True)
+    total = serializers.DecimalField(
+        max_digits=12, decimal_places=2, read_only=True)
 
     class Meta:
         model = Quotation
@@ -438,8 +437,8 @@ class QuotationCreateUpdateSerializer(serializers.ModelSerializer):
         model = Quotation
         fields = ['customer', 'valid_until',
                   'notes', 'terms_conditions', 'items']
-        read_only_fields = ('quotation_number', 'created_by',
-                            'quotation_date', 'status')
+        # Enlever 'created_by' d'ici
+        read_only_fields = ('quotation_number', 'quotation_date', 'status')
 
     def validate(self, data):
         if not data.get('customer'):
@@ -454,120 +453,17 @@ class QuotationCreateUpdateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')
+        # NE PAS passer created_by ici car il sera ajouté dans le viewset
+        quotation = Quotation.objects.create(**validated_data)
 
-        # Créer le devis en passant created_by directement
-        quotation = Quotation.objects.create(
-            customer=validated_data.get('customer'),
-            valid_until=validated_data.get('valid_until'),
-            notes=validated_data.get('notes', ''),
-            terms_conditions=validated_data.get('terms_conditions', ''),
-            # Ne pas utiliser **validated_data
-            created_by=self.context['request'].user
-        )
-
-        # Calculer les totaux
-        subtotal = Decimal('0')
-        tax_total = Decimal('0')
+        # created_by sera ajouté par le viewset via perform_create
+        # donc on ne le met pas ici
 
         for item_data in items_data:
-            # Calculer le subtotal et tax_amount pour chaque item
-            qty = Decimal(str(item_data.get('quantity', 1)))
-            unit_price = Decimal(str(item_data.get('unit_price', 0)))
-            discount_rate = Decimal(str(item_data.get('discount_rate', 0)))
-            tax_rate = Decimal(str(item_data.get('tax_rate', 20)))
+            QuotationItem.objects.create(quotation=quotation, **item_data)
 
-            discount_factor = (Decimal('100') - discount_rate) / Decimal('100')
-            tax_factor = tax_rate / Decimal('100')
-
-            item_subtotal = qty * unit_price * discount_factor
-            item_tax = item_subtotal * tax_factor
-            item_total = item_subtotal + item_tax
-
-            QuotationItem.objects.create(
-                quotation=quotation,
-                product=item_data.get('product'),
-                variant=item_data.get('variant'),
-                quantity=item_data.get('quantity', 1),
-                unit_price=unit_price,
-                discount_rate=discount_rate,
-                tax_rate=tax_rate,
-                subtotal=item_subtotal,
-                tax_amount=item_tax,
-                total=item_total,
-                notes=item_data.get('notes', '')
-            )
-
-            subtotal += item_subtotal
-            tax_total += item_tax
-
-        # Mettre à jour les totaux du devis
-        total = subtotal + tax_total
-        quotation.subtotal = subtotal
-        quotation.tax_total = tax_total
-        quotation.total = total
         quotation.save()
-
         return quotation
-
-    def update(self, instance, validated_data):
-        items_data = validated_data.pop('items', None)
-
-        # Mettre à jour les champs du devis
-        instance.customer = validated_data.get('customer', instance.customer)
-        instance.valid_until = validated_data.get(
-            'valid_until', instance.valid_until)
-        instance.notes = validated_data.get('notes', instance.notes)
-        instance.terms_conditions = validated_data.get(
-            'terms_conditions', instance.terms_conditions)
-        instance.save()
-
-        if items_data is not None:
-            # Supprimer les anciens items
-            instance.items.all().delete()
-
-            # Recréer les items
-            subtotal = Decimal('0')
-            tax_total = Decimal('0')
-
-            for item_data in items_data:
-                qty = Decimal(str(item_data.get('quantity', 1)))
-                unit_price = Decimal(str(item_data.get('unit_price', 0)))
-                discount_rate = Decimal(str(item_data.get('discount_rate', 0)))
-                tax_rate = Decimal(str(item_data.get('tax_rate', 20)))
-
-                discount_factor = (
-                    Decimal('100') - discount_rate) / Decimal('100')
-                tax_factor = tax_rate / Decimal('100')
-
-                item_subtotal = qty * unit_price * discount_factor
-                item_tax = item_subtotal * tax_factor
-                item_total = item_subtotal + item_tax
-
-                QuotationItem.objects.create(
-                    quotation=instance,
-                    product=item_data.get('product'),
-                    variant=item_data.get('variant'),
-                    quantity=item_data.get('quantity', 1),
-                    unit_price=unit_price,
-                    discount_rate=discount_rate,
-                    tax_rate=tax_rate,
-                    subtotal=item_subtotal,
-                    tax_amount=item_tax,
-                    total=item_total,
-                    notes=item_data.get('notes', '')
-                )
-
-                subtotal += item_subtotal
-                tax_total += item_tax
-
-            # Mettre à jour les totaux
-            total = subtotal + tax_total
-            instance.subtotal = subtotal
-            instance.tax_total = tax_total
-            instance.total = total
-            instance.save()
-
-        return instance
 
 
 # ========== SERIALIZERS POUR FACTURES ==========
