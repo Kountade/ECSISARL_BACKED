@@ -155,6 +155,16 @@ class Sale(models.Model):
         ('overdue', 'En retard'),
         ('refunded', 'Remboursé'),
     )
+    PRICE_TYPE_CHOICES = (
+        ('retail', 'Prix de détail'),
+        ('wholesale', 'Prix de gros'),
+    )
+    price_type = models.CharField(
+        max_length=20,
+        choices=PRICE_TYPE_CHOICES,
+        default='retail',
+        verbose_name="Type de prix"
+    )
 
     # Références
     sale_number = models.CharField(max_length=50, unique=True)
@@ -239,9 +249,14 @@ class Sale(models.Model):
         self.save()
 
     def update_payment_status(self):
-        """Met à jour le statut de paiement"""
-        total_paid = self.payments.aggregate(
-            total=models.Sum('amount'))['total'] or 0
+        """Met à jour le statut de paiement de la vente"""
+        # Récupérer le total payé depuis les paiements de la facture
+        if hasattr(self, 'invoice') and self.invoice:
+            total_paid = self.invoice.payments.filter(
+                status='completed'
+            ).aggregate(total=models.Sum('amount'))['total'] or 0
+        else:
+            total_paid = Decimal('0')
 
         if total_paid >= self.total:
             self.payment_status = 'paid'
@@ -249,11 +264,13 @@ class Sale(models.Model):
             self.payment_status = 'partially_paid'
         else:
             # Vérifier si la date d'échéance est dépassée
-            if self.invoice and self.invoice.due_date < timezone.now().date():
+            if hasattr(self, 'invoice') and self.invoice and self.invoice.due_date < timezone.now().date():
                 self.payment_status = 'overdue'
             else:
                 self.payment_status = 'pending'
-        self.save()
+
+        # Sauvegarder sans rappeler update_payment_status pour éviter la récursion
+        super(Sale, self).save(update_fields=['payment_status'])
 
 
 class SaleItem(models.Model):
@@ -584,7 +601,8 @@ class Payment(models.Model):
 
         # Mettre à jour le montant payé de la facture
         self.invoice.paid_amount = self.invoice.payments.filter(
-            status='completed').aggregate(total=models.Sum('amount'))['total'] or 0
+            status='completed'
+        ).aggregate(total=models.Sum('amount'))['total'] or 0
         self.invoice.save()
 
         # Mettre à jour le statut de paiement de la vente

@@ -1,4 +1,5 @@
 # sales/serializers.py - Version CORRIGÉE (supprimer les doublons)
+from products.models import Product
 from decimal import Decimal
 from django.utils import timezone
 from rest_framework import serializers
@@ -6,6 +7,8 @@ from .models import *
 from products.serializers import ProductListSerializer, ProductVariantSerializer
 from users.serializers import UserSerializer
 from inventory.serializers import WarehouseSerializer
+
+from products.models import Product   # Ajoutez cet import en haut du fichier
 
 
 class CustomerAddressSerializer(serializers.ModelSerializer):
@@ -135,23 +138,21 @@ class SaleDetailSerializer(serializers.ModelSerializer):
     def get_returns(self, obj):
         return ReturnSerializer(obj.returns.all(), many=True).data
 
+# sales/serializers.py (modification de SaleCreateUpdateSerializer)
+
 
 class SaleCreateUpdateSerializer(serializers.ModelSerializer):
-    items = SaleItemSerializer(many=True)
+    items = serializers.ListField(
+        child=serializers.DictField(),
+        write_only=True
+    )
 
     class Meta:
         model = Sale
         fields = [
-            'customer',
-            'warehouse',
-            'delivery_date',
-            'shipping_address',
-            'notes',
-            'internal_notes',
-            'terms_conditions',
-            'discount_rate',
-            'shipping_cost',
-            'items'
+            'customer', 'warehouse', 'delivery_date', 'shipping_address',
+            'notes', 'internal_notes', 'terms_conditions',
+            'discount_rate', 'shipping_cost', 'price_type', 'items'
         ]
         read_only_fields = ('sale_number', 'created_by', 'validated_by',
                             'created_at', 'updated_at', 'sale_date', 'status',
@@ -159,69 +160,78 @@ class SaleCreateUpdateSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         if not data.get('customer'):
-            raise serializers.ValidationError({
-                'customer': 'Le client est obligatoire'
-            })
-
+            raise serializers.ValidationError(
+                {'customer': 'Le client est obligatoire'})
         if not data.get('warehouse'):
-            raise serializers.ValidationError({
-                'warehouse': 'L\'entrepôt est obligatoire'
-            })
-
-        if not data.get('items'):
-            raise serializers.ValidationError({
-                'items': 'Au moins un produit est requis'
-            })
-
-        for item in data.get('items', []):
+            raise serializers.ValidationError(
+                {'warehouse': 'L\'entrepôt est obligatoire'})
+        items = data.get('items', [])
+        if not items:
+            raise serializers.ValidationError(
+                {'items': 'Au moins un produit est requis'})
+        for idx, item in enumerate(items):
             if not item.get('product'):
-                raise serializers.ValidationError({
-                    'items': 'Chaque ligne doit avoir un produit sélectionné'
-                })
+                raise serializers.ValidationError(
+                    {'items': f'Ligne {idx+1} : produit manquant'})
             if item.get('quantity', 0) <= 0:
-                raise serializers.ValidationError({
-                    'items': 'La quantité doit être supérieure à 0'
-                })
-            if item.get('unit_price', 0) <= 0:
-                raise serializers.ValidationError({
-                    'items': 'Le prix unitaire doit être supérieur à 0'
-                })
-
-            product = item.get('product')
-            quantity = item.get('quantity', 0)
-            if product and product.stock_quantity < quantity:
-                raise serializers.ValidationError({
-                    'items': f"Stock insuffisant pour {product.name}. "
-                    f"Disponible: {product.stock_quantity}"
-                })
-
+                raise serializers.ValidationError(
+                    {'items': f'Ligne {idx+1} : quantité invalide'})
         return data
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')
-        sale = Sale.objects.create(**validated_data)
+        customer = validated_data.pop('customer')      # instance Customer
+        warehouse = validated_data.pop('warehouse')   # instance Warehouse
+
+        sale = Sale.objects.create(
+            customer=customer, warehouse=warehouse, **validated_data)
         sale.created_by = self.context['request'].user
         sale.save()
 
+        price_type = validated_data.get('price_type', 'retail')
         for item_data in items_data:
-            SaleItem.objects.create(sale=sale, **item_data)
+            # ← récupération de l’instance
+            product = Product.objects.get(id=item_data['product'])
+            quantity = item_data['quantity']
+            if price_type == 'wholesale':
+                unit_price = product.wholesale_price or product.sale_price
+            else:
+                unit_price = product.sale_price
 
+            SaleItem.objects.create(
+                sale=sale,
+                product=product,
+                quantity=quantity,
+                unit_price=unit_price,
+                discount_rate=0,
+                tax_rate=20
+            )
         sale.calculate_totals()
         return sale
 
     def update(self, instance, validated_data):
         items_data = validated_data.pop('items', None)
-
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
 
         if items_data is not None:
             instance.items.all().delete()
+            price_type = validated_data.get('price_type', instance.price_type)
             for item_data in items_data:
-                SaleItem.objects.create(sale=instance, **item_data)
-
-        instance.calculate_totals()
+                product = Product.objects.get(id=item_data['product'])
+                quantity = item_data['quantity']
+                if price_type == 'wholesale':
+                    unit_price = product.wholesale_price or product.sale_price
+                else:
+                    unit_price = product.sale_price
+                SaleItem.objects.create(
+                    sale=instance,
+                    product=product,
+                    quantity=quantity,
+                    unit_price=unit_price
+                )
+            instance.calculate_totals()
         return instance
 
 
@@ -655,6 +665,8 @@ class PaymentSerializer(serializers.ModelSerializer):
 
 # sales/serializers.py - CORRECTION du PaymentCreateSerializer
 
+# sales/serializers.py - Modifiez le PaymentCreateSerializer
+
 class PaymentCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Payment
@@ -675,27 +687,39 @@ class PaymentCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         invoice = validated_data.pop('invoice')
-        # Ne PAS passer received_by ici car il sera ajouté dans le viewset
-        # received_by sera ajouté par le viewset via perform_create
 
         payment = Payment.objects.create(
             invoice=invoice,
             customer=invoice.sale.customer,
-            **validated_data  # Ne pas mettre received_by ici
+            **validated_data
         )
 
         # Mettre à jour le montant payé de la facture
-        payment.invoice.paid_amount = payment.invoice.payments.filter(status='completed').aggregate(
-            total=models.Sum('amount')
-        )['total'] or 0
-        payment.invoice.save()
+        total_paid = invoice.payments.filter(
+            status='completed'
+        ).aggregate(total=models.Sum('amount'))['total'] or 0
 
+        invoice.paid_amount = total_paid
+        invoice.save()
+
+        # === CORRECTION ICI ===
         # Mettre à jour le statut de paiement de la vente
-        if payment.invoice.sale:
-            payment.invoice.sale.update_payment_status()
+        sale = invoice.sale
+        sale.payment_status = self._get_payment_status(sale, total_paid)
+        sale.save(update_fields=['payment_status'])
 
         return payment
 
+    def _get_payment_status(self, sale, total_paid):
+        """Calcule le statut de paiement"""
+        if total_paid >= sale.total:
+            return 'paid'
+        elif total_paid > 0:
+            return 'partially_paid'
+        else:
+            if sale.invoice and sale.invoice.due_date < timezone.now().date():
+                return 'overdue'
+            return 'pending'
 # ========== SERIALIZERS POUR RETOURS ==========
 
 

@@ -1,5 +1,6 @@
 # products/serializers.py
 
+from sales.models import Customer  # À ajouter en haut du fichier
 from rest_framework import serializers
 from .models import *
 from users.serializers import UserSerializer
@@ -74,26 +75,35 @@ class ProductListSerializer(serializers.ModelSerializer):
     brand_name = serializers.CharField(source='brand.name', read_only=True)
     unit_abbrev = serializers.CharField(
         source='unit.abbreviation', read_only=True)
-    # Changé de main_image_url à main_image
-    main_image = serializers.SerializerMethodField()
+    main_image_url = serializers.SerializerMethodField()
+    # Prix suggéré selon price_type
+    suggested_price = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = ('id', 'reference', 'barcode', 'name', 'category_name', 'brand_name',
                   'purchase_price', 'sale_price', 'wholesale_price', 'stock_quantity',
                   'minimum_stock', 'is_low_stock', 'is_active', 'is_featured',
-                  'main_image', 'unit_abbrev', 'margin_percentage')  # Changé ici aussi
+                  'main_image_url', 'unit_abbrev', 'margin_percentage', 'suggested_price')
 
-    def get_main_image(self, obj):
-        """Retourne l'URL complète de l'image principale"""
+    def get_main_image_url(self, obj):
         request = self.context.get('request')
         if obj.main_image and request:
-            # Construire l'URL absolue
             return request.build_absolute_uri(obj.main_image.url)
         elif obj.main_image:
-            # Si pas de request dans le contexte, retourner l'URL relative
             return obj.main_image.url
         return None
+
+    def get_suggested_price(self, obj):
+        """Retourne le prix suggéré selon le paramètre 'price_type' (retail ou wholesale)"""
+        request = self.context.get('request')
+        if request and request.method == 'GET':
+            price_type = request.query_params.get('price_type')
+            if price_type == 'wholesale':
+                # Utiliser le prix de gros s'il existe, sinon le prix de détail
+                return float(obj.wholesale_price) if obj.wholesale_price else float(obj.sale_price)
+        # Par défaut : prix de détail
+        return float(obj.sale_price)
 
 
 class ProductDetailSerializer(serializers.ModelSerializer):
