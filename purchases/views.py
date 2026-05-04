@@ -366,7 +366,12 @@ class SupplierCatalogViewset(viewsets.ModelViewSet):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+# purchases/views.py – Classe PurchaseAlertViewset complète
+
 class PurchaseAlertViewset(viewsets.ModelViewSet):
+    """
+    Viewset pour gérer les alertes d'achat
+    """
     permission_classes = [permissions.IsAuthenticated]
     queryset = PurchaseAlert.objects.filter(is_active=True)
     serializer_class = PurchaseAlertSerializer
@@ -375,6 +380,7 @@ class PurchaseAlertViewset(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def resolve(self, request, pk=None):
+        """Marquer une alerte comme résolue"""
         alert = self.get_object()
         alert.is_active = False
         alert.resolved_at = timezone.now()
@@ -384,6 +390,7 @@ class PurchaseAlertViewset(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def check_reorders(self, request):
+        """Vérifie les stocks et crée des alertes de réapprovisionnement"""
         from products.models import Product
         alerts_created = []
         products = Product.objects.filter(
@@ -396,13 +403,15 @@ class PurchaseAlertViewset(viewsets.ModelViewSet):
                 alert_type='reorder',
                 is_active=True
             ).exists():
+                suggested_qty = None
+                if product.maximum_stock and product.maximum_stock > product.stock_quantity:
+                    suggested_qty = product.maximum_stock - product.stock_quantity
                 alert = PurchaseAlert.objects.create(
                     product=product,
                     alert_type='reorder',
                     current_stock=product.stock_quantity,
                     reorder_point=product.minimum_stock,
-                    suggested_quantity=product.maximum_stock -
-                    product.stock_quantity if product.maximum_stock else None,
+                    suggested_quantity=suggested_qty,
                     message=f"Stock faible pour {product.name} ({product.reference}). "
                     f"Actuel: {product.stock_quantity}, Seuil: {product.minimum_stock}"
                 )
@@ -410,4 +419,42 @@ class PurchaseAlertViewset(viewsets.ModelViewSet):
         return Response({
             'alerts_created': len(alerts_created),
             'products_checked': products.count()
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'])
+    def check_delivery_delays(self, request):
+        """
+        Vérifie les commandes non réceptionnées dont la date prévue est dépassée
+        et crée des alertes de type 'delivery_delay'
+        """
+        from .models import PurchaseOrder
+        alerts_created = []
+        today = timezone.now().date()
+        # Commandes en retard : non reçues, non annulées, date prévue < aujourd'hui
+        delayed_orders = PurchaseOrder.objects.filter(
+            expected_date__lt=today,
+            status__in=['confirmed', 'in_transit', 'partially_received']
+        )
+        for order in delayed_orders:
+            # Vérifier si une alerte active existe déjà pour cette commande
+            existing = PurchaseAlert.objects.filter(
+                alert_type='delivery_delay',
+                is_active=True,
+                message__icontains=order.order_number
+            ).exists()
+            if not existing:
+                alert = PurchaseAlert.objects.create(
+                    product=None,               # pas de produit spécifique
+                    supplier=order.supplier,
+                    alert_type='delivery_delay',
+                    current_stock=0,
+                    reorder_point=0,
+                    suggested_quantity=None,
+                    message=f"Retard de livraison pour la commande {order.order_number}. "
+                    f"Date prévue: {order.expected_date}. Fournisseur: {order.supplier.company_name}"
+                )
+                alerts_created.append(alert.id)
+        return Response({
+            'alerts_created': len(alerts_created),
+            'orders_checked': delayed_orders.count()
         }, status=status.HTTP_200_OK)
