@@ -88,6 +88,8 @@ class Location(models.Model):
     def __str__(self):
         return f"{self.warehouse.code} - {self.code}"
 
+# inventory/models.py - Correction du champ quantity
+
 
 class StockMovement(models.Model):
     """Mouvement de stock"""
@@ -124,7 +126,10 @@ class StockMovement(models.Model):
         null=True, blank=True, related_name='stock_movements'
     )
 
-    quantity = models.IntegerField(validators=[MinValueValidator(1)])
+    # ✅ CORRECTION: Supprimer MinValueValidator pour permettre les valeurs négatives
+    # ou utiliser une valeur absolue
+    # ← Supprimer validators=[MinValueValidator(1)]
+    quantity = models.IntegerField()
 
     from_warehouse = models.ForeignKey(
         Warehouse, on_delete=models.PROTECT,
@@ -180,7 +185,8 @@ class StockMovement(models.Model):
             else:
                 self.reference = "MOV000001"
 
-        self.total_price = self.quantity * self.unit_price
+        # ✅ CORRECTION: Utiliser la valeur absolue pour le prix total
+        self.total_price = abs(self.quantity) * self.unit_price
         super().save(*args, **kwargs)
 
 

@@ -67,6 +67,10 @@ class StockMovementDetailSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+# inventory/serializers.py - Correction du StockMovementCreateSerializer
+
+# inventory/serializers.py
+
 class StockMovementCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockMovement
@@ -75,26 +79,70 @@ class StockMovementCreateSerializer(serializers.ModelSerializer):
                             'movement_date', 'created_by')
 
     def validate(self, data):
-        # Vérifier le stock disponible pour les sorties
-        if data.get('movement_type') in ['out', 'transfer']:
-            product = data.get('product')
-            quantity = data.get('quantity', 0)
+        # ✅ CORRECTION: Forcer la quantité à être POSITIVE
+        quantity = data.get('quantity', 0)
+        movement_type = data.get('movement_type')
 
-            if product and product.stock_quantity < quantity:
-                raise serializers.ValidationError(
-                    f"Stock insuffisant. Disponible: {product.stock_quantity}"
-                )
+        # ✅ S'assurer que la quantité est toujours positive
+        if quantity < 0:
+            data['quantity'] = abs(quantity)
+            quantity = abs(quantity)
+
+        # Vérifier le stock disponible pour les sorties
+        if movement_type in ['out', 'transfer']:
+            product = data.get('product')
+
+            if movement_type == 'transfer':
+                from_warehouse = data.get('from_warehouse')
+                if product and from_warehouse:
+                    # Calculer le stock dans l'entrepôt source
+                    from inventory.models import StockMovement
+                    from django.db.models import Sum
+
+                    stock_in = StockMovement.objects.filter(
+                        product=product,
+                        to_warehouse=from_warehouse
+                    ).aggregate(total=Sum('quantity'))['total'] or 0
+
+                    stock_out = StockMovement.objects.filter(
+                        product=product,
+                        from_warehouse=from_warehouse
+                    ).aggregate(total=Sum('quantity'))['total'] or 0
+
+                    stock_disponible = stock_in - stock_out
+
+                    if stock_disponible < quantity:
+                        raise serializers.ValidationError({
+                            'quantity': f"Stock insuffisant dans l'entrepôt source. Disponible: {stock_disponible}, Demandé: {quantity}"
+                        })
+            else:
+                # Pour les sorties normales, vérifier le stock global
+                if product and product.stock_quantity < quantity:
+                    raise serializers.ValidationError({
+                        'quantity': f"Stock insuffisant. Disponible: {product.stock_quantity}"
+                    })
 
         # Vérifier que les entrepôts sont différents pour un transfert
-        if data.get('movement_type') == 'transfer':
+        if movement_type == 'transfer':
             from_wh = data.get('from_warehouse')
             to_wh = data.get('to_warehouse')
             if from_wh and to_wh and from_wh == to_wh:
-                raise serializers.ValidationError(
-                    "Les entrepôts source et destination doivent être différents"
-                )
+                raise serializers.ValidationError({
+                    'to_warehouse': "Les entrepôts source et destination doivent être différents"
+                })
 
         return data
+
+    def create(self, validated_data):
+        # ✅ FORCER la quantité à être POSITIVE
+        if validated_data.get('quantity', 0) < 0:
+            validated_data['quantity'] = abs(validated_data['quantity'])
+
+        # ✅ Pour les transferts, s'assurer que la quantité est positive
+        if validated_data.get('movement_type') == 'transfer':
+            validated_data['quantity'] = abs(validated_data.get('quantity', 0))
+
+        return super().create(validated_data)
 
 
 class TransferListSerializer(serializers.ModelSerializer):

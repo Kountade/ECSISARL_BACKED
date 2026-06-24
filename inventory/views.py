@@ -91,6 +91,9 @@ class LocationViewset(viewsets.ModelViewSet):
     search_fields = ['code', 'aisle', 'description']
 
 # inventory/views.py
+# inventory/views.py - Correction complète du StockMovementViewset
+
+# inventory/views.py - Correction du StockMovementViewset
 
 
 class StockMovementViewset(viewsets.ModelViewSet):
@@ -116,8 +119,6 @@ class StockMovementViewset(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-
-        # Filtre par date
         start_date = self.request.query_params.get('start_date')
         end_date = self.request.query_params.get('end_date')
 
@@ -132,50 +133,53 @@ class StockMovementViewset(viewsets.ModelViewSet):
         """
         Met à jour le stock du produit après création du mouvement
         """
-        # Sauvegarder d'abord le mouvement
-        movement = serializer.save(created_by=self.request.user)
+        # ✅ Récupérer les données validées
+        validated_data = serializer.validated_data
+        movement_type = validated_data.get('movement_type')
+        product = validated_data.get('product')
+        quantity = validated_data.get('quantity', 0)
+        from_warehouse = validated_data.get('from_warehouse')
+        to_warehouse = validated_data.get('to_warehouse')
 
-        # Récupérer le produit concerné
-        product = movement.product
+        # ✅ Pour les transferts, s'assurer que la quantité est POSITIVE
+        if movement_type == 'transfer' and quantity < 0:
+            validated_data['quantity'] = abs(quantity)
+            quantity = abs(quantity)
+
+        # Sauvegarder le mouvement
+        movement = serializer.save(created_by=self.request.user)
 
         # Mettre à jour le stock en fonction du type de mouvement
         try:
             if movement.movement_type == 'in':
-                # Entrée en stock : on ajoute la quantité
                 product.stock_quantity += movement.quantity
 
             elif movement.movement_type == 'out':
-                # Sortie de stock : on vérifie le stock disponible
                 if product.stock_quantity >= movement.quantity:
                     product.stock_quantity -= movement.quantity
                 else:
-                    # Si stock insuffisant, on supprime le mouvement créé et on lève une erreur
                     movement.delete()
                     raise ValidationError({
                         'quantity': f"Stock insuffisant. Disponible: {product.stock_quantity}"
                     })
 
             elif movement.movement_type == 'transfer':
-                # Transfert : on ne modifie pas le stock global du produit
-                # car le stock est juste déplacé d'un entrepôt à l'autre
-                # Le stock total reste le même
+                # ✅ Pour un transfert, le stock global ne change PAS
+                # car c'est juste un déplacement d'un entrepôt à un autre
+                # On ne modifie PAS product.stock_quantity
+                # Mais on s'assure que la quantité est POSITIVE
                 pass
 
             elif movement.movement_type == 'adjustment':
-                # Ajustement : on remplace complètement le stock
-                # Attention: ceci est un cas particulier, à utiliser avec précaution
                 product.stock_quantity = movement.quantity
 
             elif movement.movement_type == 'return':
-                # Retour fournisseur : comme une entrée
                 product.stock_quantity += movement.quantity
 
             elif movement.movement_type == 'return_customer':
-                # Retour client : comme une entrée
                 product.stock_quantity += movement.quantity
 
             elif movement.movement_type == 'scrap':
-                # Mise au rebut : comme une sortie
                 if product.stock_quantity >= movement.quantity:
                     product.stock_quantity -= movement.quantity
                 else:
@@ -185,7 +189,6 @@ class StockMovementViewset(viewsets.ModelViewSet):
                     })
 
             elif movement.movement_type == 'quarantine':
-                # Mise en quarantaine : comme une sortie (le produit n'est plus disponible)
                 if product.stock_quantity >= movement.quantity:
                     product.stock_quantity -= movement.quantity
                 else:
@@ -194,10 +197,10 @@ class StockMovementViewset(viewsets.ModelViewSet):
                         'quantity': f"Stock insuffisant pour mise en quarantaine. Disponible: {product.stock_quantity}"
                     })
 
-            # Sauvegarder le produit avec son nouveau stock
+            # Sauvegarder le produit
             product.save()
 
-            # Optionnel: créer une alerte si le stock devient faible
+            # Créer une alerte si le stock devient faible
             if product.stock_quantity <= product.minimum_stock:
                 StockAlert.objects.create(
                     product=product,
@@ -209,15 +212,11 @@ class StockMovementViewset(viewsets.ModelViewSet):
                 )
 
         except ValidationError as e:
-            # Si une erreur de validation se produit, on la propage
             raise e
         except Exception as e:
-            # En cas d'erreur inattendue, on supprime le mouvement
             movement.delete()
             raise ValidationError(
                 f"Erreur lors de la mise à jour du stock: {str(e)}")
-
-    # ... vos autres actions (by_product, today, etc.)
 
 
 class TransferViewset(viewsets.ModelViewSet):
@@ -242,67 +241,135 @@ class TransferViewset(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
+    def get_warehouse_stock(self, product, warehouse):
+        """
+        Calcule le stock d'un produit dans un entrepôt spécifique
+        """
+        # Entrées dans l'entrepôt
+        stock_in = StockMovement.objects.filter(
+            product=product,
+            to_warehouse=warehouse
+        ).aggregate(total=Sum('quantity'))['total'] or 0
+
+        # Sorties de l'entrepôt
+        stock_out = StockMovement.objects.filter(
+            product=product,
+            from_warehouse=warehouse
+        ).aggregate(total=Sum('quantity'))['total'] or 0
+
+        return stock_in - stock_out
+
     @action(detail=True, methods=['post'])
     def start(self, request, pk=None):
         """Démarrer un transfert (passer en transit)"""
         transfer = self.get_object()
-        if transfer.status != 'pending':
-            return Response({"error": "Transfert déjà démarré"}, status=400)
 
+        if transfer.status not in ['draft', 'pending']:
+            return Response(
+                {"error": f"Le transfert ne peut pas être démarré. Statut actuel: {transfer.get_status_display()}"},
+                status=400
+            )
+
+        # Vérifier le stock disponible dans l'entrepôt source pour chaque article
+        for item in transfer.items.all():
+            stock_disponible = self.get_warehouse_stock(
+                item.product,
+                transfer.from_warehouse
+            )
+
+            if stock_disponible < item.quantity:
+                return Response({
+                    "error": f"Stock insuffisant dans l'entrepôt source pour {item.product.name}. "
+                    f"Disponible: {stock_disponible}, Demandé: {item.quantity}"
+                }, status=400)
+
+        # Si le statut est 'draft', le passer d'abord en 'pending'
+        if transfer.status == 'draft':
+            transfer.status = 'pending'
+            transfer.save()
+
+        # Puis passer en 'in_transit'
         transfer.status = 'in_transit'
         transfer.save()
 
-        # Créer les mouvements de stock
+        # Créer les mouvements de stock (sortie de l'entrepôt source)
         for item in transfer.items.all():
-            # Sortie de l'entrepôt source
+            # ✅ Sortie de l'entrepôt source (quantité NEGATIVE dans le mouvement)
             StockMovement.objects.create(
                 movement_type='transfer',
                 reference_type='transfer',
                 reference_id=transfer.id,
                 product=item.product,
                 variant=item.variant,
-                quantity=item.quantity,
+                quantity=item.quantity,  # Quantité positive pour la sortie
                 from_warehouse=transfer.from_warehouse,
+                to_warehouse=None,  # Pas de destination pour la sortie
                 unit_price=item.unit_price,
                 notes=f"Transfert {transfer.reference} - Départ",
                 created_by=request.user
             )
 
-        return Response({"status": "transfer started"})
+        return Response({
+            "status": "transfer started",
+            "message": f"Le transfert {transfer.reference} a été démarré avec succès"
+        })
 
     @action(detail=True, methods=['post'])
     def receive(self, request, pk=None):
         """Réceptionner un transfert"""
         transfer = self.get_object()
         if transfer.status not in ['in_transit', 'partial']:
-            return Response({"error": "Transfert non en transit"}, status=400)
+            return Response(
+                {"error": f"Le transfert ne peut pas être réceptionné. Statut actuel: {transfer.get_status_display()}"},
+                status=400
+            )
 
         items_data = request.data.get('items', [])
+
+        if not items_data:
+            return Response(
+                {"error": "Aucun article à réceptionner"},
+                status=400
+            )
 
         for item_data in items_data:
             item_id = item_data.get('id')
             quantity_received = item_data.get('quantity_received', 0)
 
+            if quantity_received <= 0:
+                continue
+
             try:
                 item = transfer.items.get(id=item_id)
+
+                if quantity_received > item.remaining_quantity:
+                    return Response(
+                        {"error": f"La quantité reçue ({quantity_received}) dépasse la quantité restante ({item.remaining_quantity}) pour {item.product.name}"},
+                        status=400
+                    )
+
                 item.quantity_received += quantity_received
                 item.save()
 
-                # Créer l'entrée dans l'entrepôt destination
+                # ✅ Entrée dans l'entrepôt destination (quantité POSITIVE)
                 StockMovement.objects.create(
                     movement_type='transfer',
                     reference_type='transfer',
                     reference_id=transfer.id,
                     product=item.product,
                     variant=item.variant,
-                    quantity=quantity_received,
+                    quantity=quantity_received,  # Quantité positive pour l'entrée
+                    from_warehouse=None,  # Pas de source pour l'entrée
                     to_warehouse=transfer.to_warehouse,
                     unit_price=item.unit_price,
                     notes=f"Transfert {transfer.reference} - Réception",
                     created_by=request.user
                 )
             except TransferItem.DoesNotExist:
-                return Response({"error": f"Item {item_id} not found"}, status=400)
+                return Response(
+                    {"error": f"L'article {item_id} n'existe pas dans ce transfert"},
+                    status=400
+                )
 
         # Mettre à jour le statut
         all_received = all(item.remaining_quantity ==
@@ -315,19 +382,30 @@ class TransferViewset(viewsets.ModelViewSet):
 
         transfer.save()
 
-        return Response(TransferDetailSerializer(transfer).data)
+        return Response({
+            "status": "transfer received",
+            "message": f"Le transfert {transfer.reference} a été réceptionné avec succès",
+            "data": TransferDetailSerializer(transfer).data
+        })
 
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         """Annuler un transfert"""
         transfer = self.get_object()
+
         if transfer.status in ['completed', 'cancelled']:
-            return Response({"error": "Transfert déjà terminé ou annulé"}, status=400)
+            return Response(
+                {"error": f"Le transfert ne peut pas être annulé. Statut actuel: {transfer.get_status_display()}"},
+                status=400
+            )
 
         transfer.status = 'cancelled'
         transfer.save()
 
-        return Response({"status": "transfer cancelled"})
+        return Response({
+            "status": "transfer cancelled",
+            "message": f"Le transfert {transfer.reference} a été annulé avec succès"
+        })
 
 
 class InventoryCountViewset(viewsets.ModelViewSet):
