@@ -13,29 +13,28 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 import os
 import dj_database_url
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# --- SECURITY WARNING: keep the secret key used in production secret! ---
+# Utilisez une variable d'environnement pour la clé secrète en production
+SECRET_KEY = os.environ.get(
+    'SECRET_KEY', 'django-insecure-_k02r5xyf^metsz!*=f#7tit8y#y$x&s52*15(1&b^j3l(g-#y')
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+# --- SECURITY WARNING: don't run with debug turned on in production! ---
+# Désactiver DEBUG en production via une variable d'environnement
+DEBUG = os.environ.get('DEBUG', 'False') == 'True'
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-_k02r5xyf^metsz!*=f#7tit8y#y$x&s52*15(1&b^j3l(g-#y"
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-
-ALLOWED_HOSTS = ["ecsisarl-backed.onrender.com",
-                 "localhost", "127.0.0.1"]
-CSRF_TRUSTED_ORIGINS = ['https://ecsisarl-backed.onrender.com',
-                        'https://ecsisarl-backed.onrender.com',]
+ALLOWED_HOSTS = [
+    "ecsisarl-backed.onrender.com",
+    "localhost",
+    "127.0.0.1",
+]
+CSRF_TRUSTED_ORIGINS = ['https://ecsisarl-backed.onrender.com']
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
-
-# Application definition
-
+# --- Application definition ---
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -43,13 +42,15 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Applications tierces
+    "rest_framework",
+    "knox",
+    "corsheaders",
+    "django_rest_passwordreset",
+    # Vos applications
     "users",
     "inventory",
     "products",
-    "knox",
-    "rest_framework",
-    "corsheaders",
-    "django_rest_passwordreset",
     "purchases",
     "sales",
     "audit",
@@ -57,39 +58,46 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",  # Pour les fichiers statiques
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "corsheaders.middleware.CorsMiddleware",  # CORS doit être placé tôt
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    "corsheaders.middleware.CorsMiddleware",
 ]
 
-
-CORS_ALLOW_ALL_ORIGINS = True
+# --- CORS Configuration ---
+CORS_ALLOW_ALL_ORIGINS = True  # À restreindre en production si possible
 CORS_ALLOWED_ORIGINS = [
     "https://ecsisarl-backed.onrender.com",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
 
-
+# --- Authentification ---
 AUTH_USER_MODEL = 'users.CustomUser'
-
-
 AUTHENTICATION_BACKENDS = [
-    # 'users.authback.EmailBackend',
-    "django.contrib.auth.backends.ModelBackend",  # this line fixed my problem
+    "django.contrib.auth.backends.ModelBackend",
 ]
 
+# --- REST Framework ---
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': ('knox.auth.TokenAuthentication',),
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
+
+# --- URLs ---
 ROOT_URLCONF = "authentification.urls"
 
+# --- Templates ---
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR/"templates"],
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -103,16 +111,8 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "authentification.wsgi.application"
 
-REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': ('knox.auth.TokenAuthentication',),
-    'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated',
-    ],
-}
-
-# Database
+# --- Database ---
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
-
 if os.environ.get('RENDER'):
     # En ligne sur Render → PostgreSQL
     DATABASES = {
@@ -123,76 +123,57 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+            'NAME': BASE_DIR / 'db.sqlite3',
         }
     }
 
-
-# Password validation
-# https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
-
+# --- Password validation ---
 AUTH_PASSWORD_VALIDATORS = [
-    {
-        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
-    },
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-
-# the email settings
-
-
+# --- Email settings (sécurisé avec variables d'environnement) ---
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = 'bounamakountagoudiaby@gmail.com'
-EMAIL_HOST_PASSWORD = 'ngqjlxsfefxqtier'
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', 'votre-email@gmail.com')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 
-# Internationalization
-# https://docs.djangoproject.com/en/5.2/topics/i18n/
-
+# --- Internationalization ---
 LANGUAGE_CODE = "en-us"
-
 TIME_ZONE = "UTC"
-
 USE_I18N = True
-
 USE_TZ = True
 
-
-# Static files (CSS, JavaScript, Images)
+# --- Static files (CSS, JavaScript, Images) ---
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
-
-
 STATIC_URL = '/static/'
-# Dossier pour les fichiers statiques en développement
-STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]
-# Dossier pour collectstatic
-STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
-# Configuration WhiteNoise
+# --- Correction du problème du dossier static manquant ---
+# Crée le dossier 'static' à la racine s'il n'existe pas
+STATICFILES_DIRS = []
+static_dir = BASE_DIR / 'static'
+if not static_dir.exists():
+    static_dir.mkdir(parents=True, exist_ok=True)
+STATICFILES_DIRS.append(static_dir)
+
+# Dossier de destination pour la commande collectstatic
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# Configuration de WhiteNoise pour servir les fichiers statiques en production
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
-# Configuration des fichiers média
+# --- Media files ---
 MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media/')
+MEDIA_ROOT = BASE_DIR / 'media'
 
+# --- Options supplémentaires ---
+IMAGE_MAX_SIZE = (800, 800)
+THUMBNAIL_SIZE = (150, 150)
 
-# Configuration pour les images (optionnel)
-IMAGE_MAX_SIZE = (800, 800)  # Taille max des images
-THUMBNAIL_SIZE = (150, 150)  # Taille des miniatures
-
-
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
-
+# --- Default primary key field type ---
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
