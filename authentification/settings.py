@@ -49,10 +49,10 @@ INSTALLED_APPS = [
     "django_rest_passwordreset",
     # Vos applications
     "users",
-    #  "inventory",
-    # "products",
-    # "purchases",
-    # "sales",
+    "inventory",
+    "products",
+    "purchases",
+    "sales",
     #  "audit",
 ]
 
